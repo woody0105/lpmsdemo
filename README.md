@@ -30,11 +30,9 @@ export CGO_LDFLAGS="-L$HOME/compiled/lib"
 
 ```
 
-git clone https://github.com/oscar-davids/lpmsdemo.git
+git clone -b deepspeech_ws https://github.com/oscar-davids/lpmsdemo.git
 
 cd lpmsdemo 
-
-git checkout deepspeech_ws
 
 go build example/deepspeech_websocket.go
 
