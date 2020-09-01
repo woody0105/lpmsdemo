@@ -49,7 +49,9 @@ func handleaudiostream(w http.ResponseWriter, r *http.Request) {
 	bit_rate_int, _ := strconv.Atoi(bit_rate)
 	channel_int, _ := strconv.Atoi(channel)
 	bytes_seg := bit_rate_int * channel_int * seg_duration / 8
-	c, err := upgrader.Upgrade(w, r, nil)
+	respheader := make(http.Header)
+	respheader.Add("Sec-WebSocket-Protocol", "speechtotext.livepeer.com")
+	c, err := upgrader.Upgrade(w, r, respheader)
 	if err != nil {
 		log.Print("upgrade:", err)
 		return
