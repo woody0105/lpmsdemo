@@ -1,3 +1,3 @@
-module github.com/woody0105/lpmsdemo
+module github.com/oscar-davids/lpmsdemo
 
 go 1.15

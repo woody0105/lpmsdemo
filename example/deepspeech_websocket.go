@@ -1,13 +1,13 @@
 package main
 
 import (
-	"ds_websocket/ffmpeg"
 	"flag"
 	"log"
 	"net/http"
 	"strconv"
 
 	"github.com/gorilla/websocket"
+	"github.com/oscar-davids/lpmsdemo/ffmpeg"
 )
 
 var addr = flag.String("addr", "localhost:8080", "http service address")
