@@ -1,10 +1,12 @@
 package main
 
 import (
+	"encoding/binary"
+	"encoding/json"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
-	"strconv"
 
 	"github.com/gorilla/websocket"
 	"github.com/oscar-davids/lpmsdemo/ffmpeg"
@@ -15,8 +17,9 @@ var seg_duration = 5
 var upgrader = websocket.Upgrader{} // use default options
 
 type ClientJob struct {
-	recvdata []byte
-	conn     *websocket.Conn
+	// recvdata []byte
+	recvpackets []ffmpeg.TimedPacket
+	conn        *websocket.Conn
 }
 
 func speech2text(data []byte) string {
@@ -28,10 +31,18 @@ func processSeg(clientJobs chan ClientJob) {
 	for {
 		// Wait for the next job to come off the queue.
 		clientJob := <-clientJobs
-		clientJob.conn.WriteMessage(websocket.TextMessage, []byte("received segment process request"))
-		// Send back the response.
-		textres := speech2text(clientJob.recvdata)
-		clientJob.conn.WriteMessage(websocket.TextMessage, []byte(textres))
+		timestamp := clientJob.recvpackets[0].Timestamp
+		recvpackets := clientJob.recvpackets
+		var apacketsdata []byte
+		for _, recvpacket := range recvpackets {
+			apacketsdata = append(apacketsdata, recvpacket.Packetdata.Data...)
+		}
+		textres := speech2text(apacketsdata)
+		res := map[string]interface{}{"timestamp": timestamp, "text": textres}
+		jsonres, _ := json.Marshal(res)
+		// clientJob.conn.WriteMessage(websocket.TextMessage, []byte(textres))
+		fmt.Printf("json %s\n", string(jsonres))
+		clientJob.conn.WriteJSON(jsonres)
 	}
 }
 
@@ -46,9 +57,6 @@ func handleaudiostream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	bit_rate_int, _ := strconv.Atoi(bit_rate)
-	channel_int, _ := strconv.Atoi(channel)
-	bytes_seg := bit_rate_int * channel_int * seg_duration / 8
 	respheader := make(http.Header)
 	respheader.Add("Sec-WebSocket-Protocol", "speechtotext.livepeer.com")
 	c, err := upgrader.Upgrade(w, r, respheader)
@@ -59,23 +67,24 @@ func handleaudiostream(w http.ResponseWriter, r *http.Request) {
 	defer c.Close()
 	ffmpeg.CodecInit()
 	defer ffmpeg.CodecDeinit()
-	// sendchan := make(chan []byte)
-	// recvchan := make(chan []byte)
 	clientJobs := make(chan ClientJob)
 	go processSeg(clientJobs)
-	var recdata []byte
+	var recpackets []ffmpeg.TimedPacket
 	for {
 		_, message, err := c.ReadMessage()
 		if err != nil {
 			log.Println("read:", err)
 			break
 		}
-		recdata = append(recdata, message...)
-		if len(recdata) == bytes_seg {
+		timestamp := binary.LittleEndian.Uint64(message[:8])
+		packetdata := message[8:]
+		timedpacket := ffmpeg.TimedPacket{Timestamp: timestamp, Packetdata: ffmpeg.APacket{packetdata, len(packetdata)}}
+		recpackets = append(recpackets, timedpacket)
+		if len(recpackets) >= 300 {
 			log.Println("received data bytes")
 			c.WriteMessage(websocket.TextMessage, []byte("processing"))
-			clientJobs <- ClientJob{recdata, c}
-			recdata = nil
+			clientJobs <- ClientJob{recpackets, c}
+			recpackets = nil
 		}
 	}
 
@@ -85,7 +94,6 @@ func main() {
 	flag.Parse()
 	log.SetFlags(0)
 	ffmpeg.DSInit()
-	// ffmpeg.AudioDecode()
 	http.HandleFunc("/speech2text", handleaudiostream)
 	log.Fatal(http.ListenAndServe(*addr, nil))
 }

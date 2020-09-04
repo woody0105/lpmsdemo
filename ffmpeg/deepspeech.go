@@ -12,6 +12,16 @@ import (
 // #include "lpms_deepspeech.h"
 import "C"
 
+type TimedPacket struct {
+	Packetdata APacket
+	Timestamp  uint64
+}
+
+type APacket struct {
+	Data   []byte
+	Length int
+}
+
 func DSInit() int {
 	C.deepspeech_init()
 	fmt.Println("deepspeech initialized")
@@ -52,10 +62,6 @@ func DSSpeechToText1(data []byte) (string, error) {
 	return C.GoString(str), nil
 }
 
-// func AudioDecode() int {
-// 	C.test()
-// 	return 0
-// }
 func CodecInit() {
 	C.audio_codec_init()
 }

@@ -75,7 +75,7 @@ int compare_audioinfo(Audioinfo a, Audioinfo b){
   return -1;
 }
 
-#define AUDIO_INBUF_SIZE 128000 // 20480
+#define AUDIO_INBUF_SIZE 512000 // 20480
 #define AUDIO_REFILL_THRESH 4096
 
 static int get_format_from_sample_fmt(const char **fmt,
