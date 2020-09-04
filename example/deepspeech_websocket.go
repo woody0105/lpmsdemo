@@ -42,7 +42,7 @@ func processSeg(clientJobs chan ClientJob) {
 		jsonres, _ := json.Marshal(res)
 		// clientJob.conn.WriteMessage(websocket.TextMessage, []byte(textres))
 		fmt.Printf("json %s\n", string(jsonres))
-		clientJob.conn.WriteJSON(jsonres)
+		clientJob.conn.WriteMessage(websocket.TextMessage, []byte(string(jsonres)))
 	}
 }
 
@@ -76,13 +76,12 @@ func handleaudiostream(w http.ResponseWriter, r *http.Request) {
 			log.Println("read:", err)
 			break
 		}
-		timestamp := binary.LittleEndian.Uint64(message[:8])
+		timestamp := binary.BigEndian.Uint64(message[:8])
 		packetdata := message[8:]
 		timedpacket := ffmpeg.TimedPacket{Timestamp: timestamp, Packetdata: ffmpeg.APacket{packetdata, len(packetdata)}}
 		recpackets = append(recpackets, timedpacket)
 		if len(recpackets) >= 300 {
 			log.Println("received data bytes")
-			c.WriteMessage(websocket.TextMessage, []byte("processing"))
 			clientJobs <- ClientJob{recpackets, c}
 			recpackets = nil
 		}
