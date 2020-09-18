@@ -62,6 +62,16 @@ func DSSpeechToText1(data []byte) (string, error) {
 	return C.GoString(str), nil
 }
 
+func FeedPacket(pkt TimedPacket) string {
+	// timestamp := pkt.Timestamp
+	// fmt.Println(timestamp)
+	pktdata := pkt.Packetdata
+	buffer := (*C.char)(unsafe.Pointer(C.CString(string(pktdata.Data))))
+	defer C.free(unsafe.Pointer(buffer))
+	str := C.ds_feedpkt(buffer, C.int(pktdata.Length))
+	return C.GoString(str)
+}
+
 func CodecInit() {
 	C.audio_codec_init()
 }
@@ -69,3 +79,24 @@ func CodecInit() {
 func CodecDeinit() {
 	C.audio_codec_deinit()
 }
+
+/*
+func Create_DSStream() {
+	C.create_dsstream()
+}
+
+func Finish_DSStream() (string, error) {
+	str := C.finish_dsstream()
+	if str == nil {
+		return "", errors.New("conversion failed")
+	}
+
+	defer C.free(unsafe.Pointer(str))
+
+	return C.GoString(str), nil
+}
+
+func StreamInference() {
+	C.stream_inference()
+}
+*/

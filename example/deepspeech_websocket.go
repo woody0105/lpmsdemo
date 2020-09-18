@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/oscar-davids/lpmsdemo/ffmpeg"
@@ -37,7 +39,10 @@ func processSeg(clientJobs chan ClientJob) {
 		for _, recvpacket := range recvpackets {
 			apacketsdata = append(apacketsdata, recvpacket.Packetdata.Data...)
 		}
+		start := time.Now()
 		textres := speech2text(apacketsdata)
+		duration := time.Since(start)
+		fmt.Println("Elapsed time:", duration)
 		res := map[string]interface{}{"timestamp": timestamp, "text": textres}
 		jsonres, _ := json.Marshal(res)
 		// clientJob.conn.WriteMessage(websocket.TextMessage, []byte(textres))
@@ -67,9 +72,8 @@ func handleaudiostream(w http.ResponseWriter, r *http.Request) {
 	defer c.Close()
 	ffmpeg.CodecInit()
 	defer ffmpeg.CodecDeinit()
-	clientJobs := make(chan ClientJob)
-	go processSeg(clientJobs)
-	var recpackets []ffmpeg.TimedPacket
+
+	var last string
 	for {
 		_, message, err := c.ReadMessage()
 		if err != nil {
@@ -79,11 +83,14 @@ func handleaudiostream(w http.ResponseWriter, r *http.Request) {
 		timestamp := binary.BigEndian.Uint64(message[:8])
 		packetdata := message[8:]
 		timedpacket := ffmpeg.TimedPacket{Timestamp: timestamp, Packetdata: ffmpeg.APacket{packetdata, len(packetdata)}}
-		recpackets = append(recpackets, timedpacket)
-		if len(recpackets) >= 300 {
-			log.Println("received data bytes")
-			clientJobs <- ClientJob{recpackets, c}
-			recpackets = nil
+		str := ffmpeg.FeedPacket(timedpacket)
+
+		if strings.Compare(last, str) != 0 {
+			last = str
+			res := map[string]interface{}{"timestamp": timestamp, "text": last}
+			jsonres, _ := json.Marshal(res)
+			fmt.Println(string(jsonres))
+			c.WriteMessage(websocket.TextMessage, []byte(string(jsonres)))
 		}
 	}
 

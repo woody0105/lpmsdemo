@@ -28,15 +28,25 @@ typedef struct {
 	size_t buffer_size;
 } ds_audio_buffer;
 
+#define MAX_STACK_SIZE 0x1000000
+#define PROCESSOR_UNIT 640
+
+typedef struct {
+    char pbuffer[MAX_STACK_SIZE];
+    int nPos;
+} STACK;
+
 int deepspeech_init();
 char* ds_stt(const short* aBuffer, unsigned int aBufferSize);
 char* ds_stt1(const char* aBuffer, unsigned int aBufferSize);
 SwrContext* get_swrcontext(Audioinfo audio_input);
 int compare_audioinfo(Audioinfo a, Audioinfo b);
 
-int test();
 void audio_codec_init();
 void audio_codec_deinit();
+void create_dsstream();
+char* finish_dsstream();
 ds_audio_buffer* decodeandresample(const char* aBuffer, unsigned int aBufferSize);
+char* ds_feedpkt(const char* pktdata, int pktsize);
 #endif
 

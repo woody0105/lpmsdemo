@@ -11,6 +11,7 @@
 #include <libswresample/swresample.h>
 
 #include <pthread.h>
+#include <unistd.h>
 
 #include "libswscale/swscale.h"
 #include "libavutil/imgutils.h"
@@ -19,26 +20,104 @@
 
 SwrContext* resample_ctx = NULL;
 ModelState* dsctx = NULL;      
+StreamingState* ctx = NULL;
 Audioinfo cur_audio_input;
 Audioinfo prev_audio_input;
 
-int deepspeech_init(){
-	const char *model = "deepspeech_models.pbmm";
-	const char *scorer = "deepspeech_models.scorer";
-  int status = DS_CreateModel(model, &dsctx);
-  if (status != 0){
-    av_log(0, AV_LOG_ERROR, "speech model create failed\n");    
-    return -1;
-  }
+pthread_mutex_t g_lock;
+STACK g_total_buffer;
+char* last = NULL;
+char* res = NULL;
+#ifdef INLINE
+void* stream_inference()
+{
+    // StreamingState* ctx = NULL;
 
-  status = DS_EnableExternalScorer(dsctx, scorer);
+    int status = DS_CreateStream(dsctx, &ctx);
+    if (status != DS_ERR_OK) {
+        printf("create stream inference state failed");
+        return;
+    }
+    
+    while (true) {
+        if (g_total_buffer.nPos > PROCESSOR_UNIT) {
+            // printf("total_buffer_size: %d", g_total_buffer.nPos);
+            short *pBuf = (short *)malloc(PROCESSOR_UNIT);
+            memcpy(pBuf, g_total_buffer.pbuffer, PROCESSOR_UNIT);
+            pthread_mutex_lock(&g_lock);
+            char *dst = g_total_buffer.pbuffer;
+            int remain_size = g_total_buffer.nPos - PROCESSOR_UNIT;
+            memcpy(dst, dst + PROCESSOR_UNIT, remain_size);
+            g_total_buffer.nPos -= PROCESSOR_UNIT;
+            pthread_mutex_unlock(&g_lock);
+
+            //. do process with pBuf
+            DS_FeedAudioContent(ctx, pBuf, PROCESSOR_UNIT / 2);
+            const char* partial = DS_IntermediateDecode(ctx);
+            if (strlen(partial) > 150){
+                const char* res = DS_FinishStream(ctx);
+                DS_FreeString((char *)partial);
+                av_log(0, AV_LOG_ERROR, "complete result: %s\n", res);
+                DS_CreateStream(dsctx, &ctx);
+            }
+            else if (last == NULL || strcmp(last, partial)) {
+                av_log(0, AV_LOG_ERROR, "intermediate result: %s\n", partial);
+				last = partial;
+			}
+			else {
+				DS_FreeString((char *)partial);
+			}
+            free(pBuf);
+            //
+
+            //. shift
+
+            // pthread_mutex_lock(&g_lock);
+            // g_total_buffer.nPos = 0;
+            // pthread_mutex_unlock(&g_lock);
+            //
+        } else{
+            sleep(0.001);
+        }
+    }
+}
+#endif
+int deepspeech_init(){
+	const char *model = "deepspeech-0.8.2-models.pbmm";
+	const char *scorer = "deepspeech-0.8.2-models.scorer";
+    int status = DS_CreateModel(model, &dsctx);
+    if (status != 0){
+        av_log(0, AV_LOG_ERROR, "speech model create failed\n");    
+        return -1;
+    }
+
+    status = DS_EnableExternalScorer(dsctx, scorer);
 	if (status != 0) {
 		fprintf(stderr, "Could not enable external scorer.\n");
-		return 1;
+		return -1;
 	}
 
-  av_log(0, AV_LOG_INFO, "Speech model created successfully.\n");
-  return 0;
+    av_log(0, AV_LOG_INFO, "Speech model created successfully.\n");
+    status = DS_CreateStream(dsctx, &ctx);
+    if (status != DS_ERR_OK) {
+        av_log(0, AV_LOG_ERROR, "deepspeech streaming state creation failed\n");
+        return -1;
+    }
+
+#ifdef INLINE
+    if (pthread_mutex_init(&g_lock, NULL) != 0) {
+        printf("can't create mutex\n");
+    }
+
+    pthread_t tid;
+    int err = pthread_create(&tid, NULL, &stream_inference, NULL);
+    if (err != 0)
+        printf("can't create thread\n");
+
+    g_total_buffer.nPos = 0;
+    memset(g_total_buffer.pbuffer, 0x00, MAX_STACK_SIZE);
+#endif
+    return 0;
 }
 
 char* ds_stt(const short* aBuffer, unsigned int aBufferSize){
@@ -169,10 +248,10 @@ static void decode1(AVCodecContext *dec_ctx, AVPacket *pkt, AVFrame *frame,
         av_free(out_buffer);
     }
 }
+
 const AVCodec *codec;
 AVCodecContext *c= NULL;
 AVCodecParserContext *parser = NULL;
-
 void audio_codec_init()
 {
     /* find the audio decoder */
@@ -181,7 +260,7 @@ void audio_codec_init()
         fprintf(stderr, "Codec not found\n");
         exit(1);
     }
-
+    
     parser = av_parser_init(codec->id);
     if (!parser) {
         fprintf(stderr, "Parser not found\n");
@@ -207,6 +286,95 @@ void audio_codec_deinit()
     avcodec_free_context(&c);
     av_parser_close(parser);
 }
+
+const char* decode_feed(AVCodecContext *dec_ctx, AVPacket *pkt, AVFrame *frame)
+{
+    int i, ch;
+    int ret, data_size;
+    /* send the packet with the compressed data to the decoder */
+    ret = avcodec_send_packet(dec_ctx, pkt);
+    if (ret < 0) {
+        fprintf(stderr, "Error submitting the packet to the decoder\n");
+        exit(1);
+    }
+    // const char* last = NULL;
+    /* read all the output frames (in general there may be any number of them */
+    while (ret >= 0) {
+        ret = avcodec_receive_frame(dec_ctx, frame);
+        if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
+            return NULL;
+        else if (ret < 0) {
+            fprintf(stderr, "Error during decoding\n");
+            exit(1);
+        }
+        data_size = av_get_bytes_per_sample(dec_ctx->sample_fmt);
+        if (data_size < 0) {
+            /* This should not occur, checking just for paranoia */
+            fprintf(stderr, "Failed to calculate data size\n");
+            exit(1);
+        }
+        
+        cur_audio_input.input_channels = frame->channels;
+        cur_audio_input.input_rate = frame->sample_rate;
+        cur_audio_input.input_nb_samples = frame->nb_samples;
+        cur_audio_input.input_sample_fmt = dec_ctx->sample_fmt;
+        
+        int output_channels = 1;
+        int output_rate = 16000;
+        enum AVSampleFormat output_sample_fmt = AV_SAMPLE_FMT_S16;
+        
+        if ( compare_audioinfo(cur_audio_input, prev_audio_input) != 0){
+            if (resample_ctx != NULL){
+              swr_free(&resample_ctx);
+            }
+            resample_ctx = get_swrcontext(cur_audio_input);
+        }
+        uint8_t *out_buffer = (uint8_t*)av_malloc(MAX_AUDIO_FRAME_SIZE);
+        memset(out_buffer,0x00,sizeof(out_buffer));
+
+        int out_nb_samples = av_rescale_rnd(swr_get_delay(resample_ctx, cur_audio_input.input_rate) + cur_audio_input.input_nb_samples, output_rate, cur_audio_input.input_rate, AV_ROUND_UP);
+        int out_samples = swr_convert(resample_ctx,&out_buffer,out_nb_samples,(const uint8_t **)frame->data,frame->nb_samples);
+
+        int out_buffer_size;
+
+        if(out_samples > 0){
+            out_buffer_size = av_samples_get_buffer_size(NULL, output_channels ,out_samples, output_sample_fmt, 1);
+#ifndef INLINE            
+            DS_FeedAudioContent(ctx, (const short*)out_buffer, out_buffer_size / 2);
+            const char* partial = DS_IntermediateDecode(ctx);
+            if (strlen(partial) > 150){
+                last = DS_FinishStream(ctx);
+                DS_FreeString((char *)partial);
+                av_log(0, AV_LOG_ERROR, "complete result: %s\n", last);
+                DS_CreateStream(dsctx, &ctx);
+            }
+            else if (last == NULL || strcmp(last, partial)) {
+                // av_log(0, AV_LOG_ERROR, "intermediate result: %s\n", partial);
+				last = partial;
+			}
+			else {
+				DS_FreeString((char *)partial);
+			}
+            // av_log(0, AV_LOG_ERROR, "intermediate result: %s\n", last);
+#endif
+#ifdef INLINE            
+            pthread_mutex_lock(&g_lock);
+            memcpy(g_total_buffer.pbuffer + g_total_buffer.nPos, out_buffer, out_buffer_size);
+            g_total_buffer.nPos += out_buffer_size;
+            // printf("%d byted added to total buffer\n", out_buffer_size);
+            fwrite(out_buffer, 1, out_buffer_size, audio_dst_file2);
+            pthread_mutex_unlock(&g_lock);
+#endif
+        }
+
+        // int trailing_samples = swr_convert(resample_ctx,&out_buffer,out_nb_samples,NULL,0);
+
+        memcpy(&prev_audio_input, &cur_audio_input, sizeof(Audioinfo));
+        av_free(out_buffer);
+    }
+    return res;    
+}
+
 ds_audio_buffer residual_data = {0,};
 ds_audio_buffer audio_buffer = {0,};
 uint8_t inbuf[AUDIO_INBUF_SIZE + AV_INPUT_BUFFER_PADDING_SIZE+8192];
@@ -320,12 +488,32 @@ char* ds_stt1(const char* aBuffer, unsigned int aBufferSize){
   }
 
   ds_audio_buffer* audio_buffer = NULL;
-  audio_buffer = decodeandresample(aBuffer, aBufferSize);  
-  char *textres;
+  audio_buffer = decodeandresample(aBuffer, aBufferSize);
+  char *textres = NULL;
   textres = (char *) malloc(2048);
   textres = DS_SpeechToText(dsctx, audio_buffer->buffer, audio_buffer->buffer_size);
   av_free(audio_buffer->buffer);
   audio_buffer->buffer_size = 0;
   av_log(0, AV_LOG_ERROR, "asr result: %s \n", textres);
   return textres;
+}
+
+char* ds_feedpkt(const char* pktdata, int pktsize){
+    // AVPacket *pkt;
+    AVFrame *decoded_frame = NULL;  
+    // pkt = av_packet_alloc();
+    AVPacket        packet;
+    av_init_packet(&packet);
+
+    packet.data = pktdata;
+    packet.size = pktsize;
+    // av_log(0, AV_LOG_ERROR, "pktsize=%d\n", pktsize);
+    if (!decoded_frame) {
+        if (!(decoded_frame = av_frame_alloc())) {
+            fprintf(stderr, "Could not allocate audio frame\n");
+            return NULL;
+        }
+    }   
+    decode_feed(c, &packet, decoded_frame);
+    return last;
 }
