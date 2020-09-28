@@ -78,10 +78,10 @@ func main() {
 				}
 				return
 			}
-			senddata := make([]byte, 1)
-			senddata[0] = dat[count]
+			senddata := make([]byte, 30)
+			senddata = dat[count : count+30]
 			err := c.WriteMessage(websocket.BinaryMessage, senddata)
-			count++
+			count += 30
 			if err != nil {
 				log.Println("write:", err)
 				return
@@ -103,5 +103,4 @@ func main() {
 			return
 		}
 	}
-	log.Printf("***********")
 }

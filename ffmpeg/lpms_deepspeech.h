@@ -3,7 +3,7 @@
 #include <libavutil/hwcontext.h>
 #include <libavutil/rational.h>
 #include <libswresample/swresample.h>
-
+#include "deepspeech/deepspeech.h"
 #ifndef MAX_AUDIO_FRAME_SIZE
 #define MAX_AUDIO_FRAME_SIZE 32000
 #endif
@@ -36,6 +36,16 @@ typedef struct {
     int nPos;
 } STACK;
 
+typedef struct {
+    int initialized;
+} struct_transcribe_thread;
+
+typedef struct {
+    // SwrContext* resample_ctx;
+    const AVCodec *codec;
+    AVCodecContext *c;
+} codec_params;
+
 int deepspeech_init();
 char* ds_stt(const short* aBuffer, unsigned int aBufferSize);
 char* ds_stt1(const char* aBuffer, unsigned int aBufferSize);
@@ -48,5 +58,14 @@ void create_dsstream();
 char* finish_dsstream();
 ds_audio_buffer* decodeandresample(const char* aBuffer, unsigned int aBufferSize);
 char* ds_feedpkt(const char* pktdata, int pktsize);
+
+codec_params* lpms_codec_new();
+void lpms_codec_stop(codec_params* h);
+ModelState* t_deepspeech_init();
+StreamingState* t_create_stream(ModelState *model_state);
+void t_free_model(ModelState *model_state, StreamingState *stream_ctx);
+void t_audio_codec_init(codec_params *codec_params);
+void t_audio_codec_deinit(codec_params *codec_params);
+char* t_ds_feedpkt(codec_params *codec_params, ModelState* model_ctx, StreamingState *stream_ctx, const char* pktdata, int pktsize);
 #endif
 
