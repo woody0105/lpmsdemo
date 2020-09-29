@@ -169,7 +169,7 @@ func startServer() {
 func main() {
 	flag.Parse()
 	log.SetFlags(0)
-	// ffmpeg.DSInit()
+	ffmpeg.DSInit()
 	// http.HandleFunc("/speech2text", handleconnections)
 	startServer()
 	log.Fatal(http.ListenAndServe(*addr, nil))

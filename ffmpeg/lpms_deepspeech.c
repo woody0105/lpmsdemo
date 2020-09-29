@@ -139,9 +139,9 @@ ModelState* t_deepspeech_init(){
 }
 
 
-StreamingState* t_create_stream(ModelState *model_state){
+StreamingState* t_create_stream(){
     StreamingState* stream_ctx = NULL; 
-    int status = DS_CreateStream(model_state, &stream_ctx);
+    int status = DS_CreateStream(dsctx, &stream_ctx);
     if (status != DS_ERR_OK) {
         av_log(0, AV_LOG_ERROR, "deepspeech streaming state creation failed\n");
         return NULL;
@@ -149,11 +149,9 @@ StreamingState* t_create_stream(ModelState *model_state){
     return stream_ctx;
 }
 
-void t_free_model(ModelState *model_state, StreamingState *stream_ctx){
+void t_free_model(StreamingState *stream_ctx){
     if (stream_ctx != NULL)
         DS_FinishStream(stream_ctx);
-    if (model_state != NULL)
-        DS_FreeModel(model_state);
 }
 
 char* ds_stt(const short* aBuffer, unsigned int aBufferSize){
@@ -459,31 +457,35 @@ const char* decode_feed(AVCodecContext *dec_ctx, AVPacket *pkt, AVFrame *frame)
     return res;    
 }
 
-const char* t_decode_feed(AVCodecContext *dec_ctx, ModelState* model_ctx,StreamingState* stream_ctx, AVPacket *pkt, AVFrame *frame)
+void t_decode_feed(AVCodecContext *dec_ctx, StreamingState* stream_ctx, AVPacket *pkt, AVFrame *frame, char* textres)
 {
+    if (stream_ctx == NULL)
+    {
+        av_log(0, AV_LOG_ERROR, "Stream context not created.\n");
+        return;
+    }
     int i, ch;
     int ret, data_size;
     /* send the packet with the compressed data to the decoder */
     ret = avcodec_send_packet(dec_ctx, pkt);
     if (ret < 0) {
         fprintf(stderr, "Error submitting the packet to the decoder\n");
-        return NULL;
+        return;
     }
-    // const char* last = NULL;
     /* read all the output frames (in general there may be any number of them */
     while (ret >= 0) {
         ret = avcodec_receive_frame(dec_ctx, frame);
         if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
-            return NULL;
+            return;
         else if (ret < 0) {
             fprintf(stderr, "Error during decoding\n");
-            return NULL;
+            return;
         }
         data_size = av_get_bytes_per_sample(dec_ctx->sample_fmt);
         if (data_size < 0) {
             /* This should not occur, checking just for paranoia */
             fprintf(stderr, "Failed to calculate data size\n");
-            return NULL;
+            return;
         }
         
         cur_audio_input.input_channels = frame->channels;
@@ -515,15 +517,19 @@ const char* t_decode_feed(AVCodecContext *dec_ctx, ModelState* model_ctx,Streami
             DS_FeedAudioContent(stream_ctx, (const short*)out_buffer, out_buffer_size / 2);
             const char* partial = DS_IntermediateDecode(stream_ctx);
             if (strlen(partial) > 150){
-                last = DS_FinishStream(stream_ctx);
+                partial = DS_FinishStream(stream_ctx);
+                strcpy(textres, partial);
                 DS_FreeString((char *)partial);
-                av_log(0, AV_LOG_ERROR, "complete result: %s\n", last);
-                DS_CreateStream(model_ctx, &stream_ctx);
+                av_log(0, AV_LOG_ERROR, "complete result: %s\n", textres);
+                DS_CreateStream(dsctx, &stream_ctx);
             }
-            else if (last == NULL || strcmp(last, partial)) {
- 				last = partial;
-			}
+            else if(strlen(partial) == 0 || partial == NULL){
+                partial = "";
+                strcpy(textres, partial);
+            }
 			else {
+                // res = partial;
+                strcpy(textres, partial);
 				DS_FreeString((char *)partial);
 			}
 #endif
@@ -540,8 +546,7 @@ const char* t_decode_feed(AVCodecContext *dec_ctx, ModelState* model_ctx,Streami
 
         memcpy(&prev_audio_input, &cur_audio_input, sizeof(Audioinfo));
         av_free(out_buffer);
-    }
-    return res;    
+    }    
 }
 
 ds_audio_buffer residual_data = {0,};
@@ -687,11 +692,11 @@ char* ds_feedpkt(const char* pktdata, int pktsize){
     return last;
 }
 
-char* t_ds_feedpkt(codec_params *codec_params, ModelState* model_ctx, StreamingState* stream_ctx, const char* pktdata, int pktsize){
-    if (model_ctx == NULL || stream_ctx == NULL)
+void t_ds_feedpkt(codec_params *codec_params, StreamingState* stream_ctx, char* pktdata, int pktsize, char* textres){
+    if (stream_ctx == NULL)
     {
-        av_log(0, AV_LOG_ERROR, "model not created or already freed.\n");
-        return NULL;
+        av_log(0, AV_LOG_ERROR, "Stream context not created.\n");
+        return;
     }
     c = codec_params->c;
     // AVPacket *pkt;
@@ -706,9 +711,8 @@ char* t_ds_feedpkt(codec_params *codec_params, ModelState* model_ctx, StreamingS
     if (!decoded_frame) {
         if (!(decoded_frame = av_frame_alloc())) {
             fprintf(stderr, "Could not allocate audio frame\n");
-            return NULL;
+            return;
         }
     }   
-    t_decode_feed(c, model_ctx, stream_ctx, &packet, decoded_frame);
-    return last;
+    t_decode_feed(c, stream_ctx, &packet, decoded_frame, textres);
 }

@@ -3,6 +3,7 @@ package ffmpeg
 import (
 	"errors"
 	"fmt"
+	"log"
 	"sync"
 	"unsafe"
 
@@ -30,7 +31,6 @@ type Transcriber struct {
 	Conn         *websocket.Conn
 	handle       *C.struct_transcribe_thread
 	codec_params *C.codec_params
-	modelState   *C.ModelState
 	streamState  *C.StreamingState
 	stopped      bool
 	mu           *sync.Mutex
@@ -96,8 +96,8 @@ func NewTranscriber(Id string) *Transcriber {
 		codec_params: C.lpms_codec_new(),
 		mu:           &sync.Mutex{},
 	}
-	t.modelState = C.t_deepspeech_init()
-	t.streamState = C.t_create_stream(t.modelState)
+	t.streamState = C.t_create_stream()
+	log.Println("New transcriber created.")
 	return t
 }
 
@@ -120,10 +120,11 @@ func (t *Transcriber) TranscriberCodecDeinit() {
 func (t *Transcriber) FeedPacket(pkt TimedPacket) string {
 	pktdata := pkt.Packetdata
 	codec_params := t.codec_params
-	model_ctx := t.modelState
 	stream_ctx := t.streamState
 	buffer := (*C.char)(unsafe.Pointer(C.CString(string(pktdata.Data))))
 	defer C.free(unsafe.Pointer(buffer))
-	str := C.t_ds_feedpkt(codec_params, model_ctx, stream_ctx, buffer, C.int(pktdata.Length))
+	str := (*C.char)(unsafe.Pointer(C.malloc(C.sizeof_char * 256)))
+	defer C.free(unsafe.Pointer(str))
+	C.t_ds_feedpkt(codec_params, stream_ctx, buffer, C.int(pktdata.Length), str)
 	return C.GoString(str)
 }
