@@ -66,6 +66,6 @@ StreamingState* t_create_stream();
 void t_free_model(StreamingState *stream_ctx);
 void t_audio_codec_init(codec_params *codec_params);
 void t_audio_codec_deinit(codec_params *codec_params);
-void t_ds_feedpkt(codec_params *codec_params, StreamingState *stream_ctx, char* pktdata, int pktsize, char* textres);
+StreamingState* t_ds_feedpkt(codec_params *codec_params, StreamingState *stream_ctx, char* pktdata, int pktsize, char* textres);
 #endif
 

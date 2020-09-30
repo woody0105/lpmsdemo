@@ -29,6 +29,7 @@ type APacket struct {
 type Transcriber struct {
 	Id           string
 	Conn         *websocket.Conn
+	Res          string
 	handle       *C.struct_transcribe_thread
 	codec_params *C.codec_params
 	streamState  *C.StreamingState
@@ -95,15 +96,15 @@ func NewTranscriber(Id string) *Transcriber {
 		Id:           Id,
 		codec_params: C.lpms_codec_new(),
 		mu:           &sync.Mutex{},
+		streamState:  C.t_create_stream(),
 	}
-	t.streamState = C.t_create_stream()
 	log.Println("New transcriber created.")
 	return t
 }
 
 func (t *Transcriber) StopTranscriber() {
 	C.lpms_codec_stop(t.codec_params)
-	// C.t_free_model(t.modelState, t.streamState)
+	C.t_free_model(t.streamState)
 	t = nil
 }
 
@@ -125,6 +126,11 @@ func (t *Transcriber) FeedPacket(pkt TimedPacket) string {
 	defer C.free(unsafe.Pointer(buffer))
 	str := (*C.char)(unsafe.Pointer(C.malloc(C.sizeof_char * 256)))
 	defer C.free(unsafe.Pointer(str))
-	C.t_ds_feedpkt(codec_params, stream_ctx, buffer, C.int(pktdata.Length), str)
+	t.mu.Lock()
+	new_stream_ctx := C.t_ds_feedpkt(codec_params, stream_ctx, buffer, C.int(pktdata.Length), str)
+	if new_stream_ctx != nil {
+		t.streamState = new_stream_ctx
+	}
+	t.mu.Unlock()
 	return C.GoString(str)
 }

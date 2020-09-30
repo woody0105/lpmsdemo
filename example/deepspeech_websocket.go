@@ -50,6 +50,14 @@ func RandName() string {
 	return RandomIDGenerator(10)
 }
 
+func GetTranscriberByID(clientID string) *ffmpeg.Transcriber {
+	for t := range transcribers {
+		if t.Id == clientID {
+			return t
+		}
+	}
+	return nil
+}
 func handleaudiostream(w http.ResponseWriter, r *http.Request) {
 	codec := r.Header.Get("X-WS-Audio-Codec")
 	channel := r.Header.Get("X-WS-Audio-Channels")
@@ -141,36 +149,44 @@ func handleconnections(w http.ResponseWriter, r *http.Request) {
 
 func handlemsg() {
 	for {
+		select {
 		// Grab the next message from the channel
-		msg := <-msgchan
-		timestamp := binary.BigEndian.Uint64(msg.data[:8])
-		packetdata := msg.data[8:]
-		timedpacket := ffmpeg.TimedPacket{Timestamp: timestamp, Packetdata: ffmpeg.APacket{packetdata, len(packetdata)}}
-		// str := ffmpeg.FeedPacket(timedpacket)
-		// log.Printf("processed timestamp: %d", timestamp)
-		// Send it out to the right client
-		for t := range transcribers {
-			if t.Id == msg.clientid {
-				str := t.FeedPacket(timedpacket)
-				res := map[string]interface{}{"timestamp": timestamp, "text": str}
+		case msg := <-msgchan:
+			timestamp := binary.BigEndian.Uint64(msg.data[:8])
+			packetdata := msg.data[8:]
+			timedpacket := ffmpeg.TimedPacket{Timestamp: timestamp, Packetdata: ffmpeg.APacket{packetdata, len(packetdata)}}
+			transcriber := GetTranscriberByID(msg.clientid)
+			if transcriber == nil {
+				log.Println("Transcriber not found.\n")
+				return
+			}
+			str := transcriber.FeedPacket(timedpacket)
+			if strings.Compare(transcriber.Res, str) != 0 {
+				transcriber.Res = str
+				res := map[string]interface{}{"timestamp": timestamp, "text": transcriber.Res}
 				jsonres, _ := json.Marshal(res)
 				fmt.Println(string(jsonres))
-				t.Conn.WriteMessage(websocket.TextMessage, []byte(string(jsonres)))
+				err := transcriber.Conn.WriteMessage(websocket.TextMessage, []byte(string(jsonres)))
+				if err != nil {
+					log.Println(err)
+					return
+				}
 			}
 		}
 	}
+	log.Println("msg handled")
 }
 
 func startServer() {
-	http.HandleFunc("/speech2text", handleconnections)
 	go handlemsg()
+	http.HandleFunc("/speech2text", handleconnections)
+
 }
 
 func main() {
 	flag.Parse()
 	log.SetFlags(0)
 	ffmpeg.DSInit()
-	// http.HandleFunc("/speech2text", handleconnections)
 	startServer()
 	log.Fatal(http.ListenAndServe(*addr, nil))
 }

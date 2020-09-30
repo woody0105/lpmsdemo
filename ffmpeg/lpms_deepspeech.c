@@ -96,11 +96,11 @@ int deepspeech_init(){
 	}
 
     av_log(0, AV_LOG_INFO, "Speech model created successfully.\n");
-    // status = DS_CreateStream(dsctx, &ctx);
-    // if (status != DS_ERR_OK) {
-    //     av_log(0, AV_LOG_ERROR, "deepspeech streaming state creation failed\n");
-    //     return -1;
-    // }
+    status = DS_CreateStream(dsctx, &ctx);
+    if (status != DS_ERR_OK) {
+        av_log(0, AV_LOG_ERROR, "deepspeech streaming state creation failed\n");
+        return -1;
+    }
 
 #ifdef INLINE
     if (pthread_mutex_init(&g_lock, NULL) != 0) {
@@ -145,13 +145,16 @@ StreamingState* t_create_stream(){
     if (status != DS_ERR_OK) {
         av_log(0, AV_LOG_ERROR, "deepspeech streaming state creation failed\n");
         return NULL;
+    } else {
+        av_log(0, AV_LOG_ERROR, "deepspeech streaming state created %d\n", stream_ctx);
     }
+
     return stream_ctx;
 }
 
 void t_free_model(StreamingState *stream_ctx){
     if (stream_ctx != NULL)
-        DS_FinishStream(stream_ctx);
+        DS_FreeStream(stream_ctx);
 }
 
 char* ds_stt(const short* aBuffer, unsigned int aBufferSize){
@@ -457,12 +460,12 @@ const char* decode_feed(AVCodecContext *dec_ctx, AVPacket *pkt, AVFrame *frame)
     return res;    
 }
 
-void t_decode_feed(AVCodecContext *dec_ctx, StreamingState* stream_ctx, AVPacket *pkt, AVFrame *frame, char* textres)
+StreamingState* t_decode_feed(AVCodecContext *dec_ctx, StreamingState* stream_ctx, AVPacket *pkt, AVFrame *frame, char* textres)
 {
     if (stream_ctx == NULL)
     {
         av_log(0, AV_LOG_ERROR, "Stream context not created.\n");
-        return;
+        return NULL;
     }
     int i, ch;
     int ret, data_size;
@@ -470,22 +473,24 @@ void t_decode_feed(AVCodecContext *dec_ctx, StreamingState* stream_ctx, AVPacket
     ret = avcodec_send_packet(dec_ctx, pkt);
     if (ret < 0) {
         fprintf(stderr, "Error submitting the packet to the decoder\n");
-        return;
+        return NULL;
     }
+    
     /* read all the output frames (in general there may be any number of them */
+    StreamingState* new_stream_ctx = NULL;
     while (ret >= 0) {
         ret = avcodec_receive_frame(dec_ctx, frame);
         if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
-            return;
+            return new_stream_ctx;
         else if (ret < 0) {
             fprintf(stderr, "Error during decoding\n");
-            return;
+            return new_stream_ctx;
         }
         data_size = av_get_bytes_per_sample(dec_ctx->sample_fmt);
         if (data_size < 0) {
             /* This should not occur, checking just for paranoia */
             fprintf(stderr, "Failed to calculate data size\n");
-            return;
+            return new_stream_ctx;
         }
         
         cur_audio_input.input_channels = frame->channels;
@@ -513,7 +518,7 @@ void t_decode_feed(AVCodecContext *dec_ctx, StreamingState* stream_ctx, AVPacket
 
         if(out_samples > 0){
             out_buffer_size = av_samples_get_buffer_size(NULL, output_channels ,out_samples, output_sample_fmt, 1);
-#ifndef INLINE            
+#ifndef INLINE
             DS_FeedAudioContent(stream_ctx, (const short*)out_buffer, out_buffer_size / 2);
             const char* partial = DS_IntermediateDecode(stream_ctx);
             if (strlen(partial) > 150){
@@ -521,7 +526,11 @@ void t_decode_feed(AVCodecContext *dec_ctx, StreamingState* stream_ctx, AVPacket
                 strcpy(textres, partial);
                 DS_FreeString((char *)partial);
                 av_log(0, AV_LOG_ERROR, "complete result: %s\n", textres);
-                DS_CreateStream(dsctx, &stream_ctx);
+                stream_ctx = NULL;
+                int status = DS_CreateStream(dsctx, &stream_ctx);
+                if (status == DS_ERR_OK) {
+                    new_stream_ctx = stream_ctx;
+                }
             }
             else if(strlen(partial) == 0 || partial == NULL){
                 partial = "";
@@ -546,7 +555,9 @@ void t_decode_feed(AVCodecContext *dec_ctx, StreamingState* stream_ctx, AVPacket
 
         memcpy(&prev_audio_input, &cur_audio_input, sizeof(Audioinfo));
         av_free(out_buffer);
-    }    
+    }
+
+    return new_stream_ctx;
 }
 
 ds_audio_buffer residual_data = {0,};
@@ -692,12 +703,12 @@ char* ds_feedpkt(const char* pktdata, int pktsize){
     return last;
 }
 
-void t_ds_feedpkt(codec_params *codec_params, StreamingState* stream_ctx, char* pktdata, int pktsize, char* textres){
-    if (stream_ctx == NULL)
-    {
-        av_log(0, AV_LOG_ERROR, "Stream context not created.\n");
-        return;
-    }
+StreamingState* t_ds_feedpkt(codec_params *codec_params, StreamingState* stream_ctx, char* pktdata, int pktsize, char* textres){
+    // if (stream_ctx == NULL)
+    // {
+    //     av_log(0, AV_LOG_ERROR, "Stream context not created.\n");
+    //     return;
+    // }
     c = codec_params->c;
     // AVPacket *pkt;
     AVFrame *decoded_frame = NULL;  
@@ -714,5 +725,5 @@ void t_ds_feedpkt(codec_params *codec_params, StreamingState* stream_ctx, char* 
             return;
         }
     }   
-    t_decode_feed(c, stream_ctx, &packet, decoded_frame, textres);
+    return t_decode_feed(c, stream_ctx, &packet, decoded_frame, textres);
 }
