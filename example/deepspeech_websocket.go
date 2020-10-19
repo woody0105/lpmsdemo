@@ -174,19 +174,71 @@ func handlemsg() {
 			}
 		}
 	}
-	log.Println("msg handled")
 }
 
 func startServer() {
 	go handlemsg()
 	http.HandleFunc("/speech2text", handleconnections)
+}
 
+func handleconnections1(w http.ResponseWriter, r *http.Request) {
+	codec := r.Header.Get("X-WS-Audio-Codec")
+	channel := r.Header.Get("X-WS-Audio-Channels")
+	sample_rate := r.Header.Get("X-WS-Rate")
+	bit_rate := r.Header.Get("X-WS-BitRate")
+
+	if codec == "" || channel == "" || sample_rate == "" || bit_rate == "" {
+		log.Print("audio meta data not present in header, handshake failed.")
+		return
+	}
+
+	respheader := make(http.Header)
+	respheader.Add("Sec-WebSocket-Protocol", "speechtotext.livepeer.com")
+	c, err := upgrader.Upgrade(w, r, respheader)
+	if err != nil {
+		log.Print("upgrade:", err)
+		return
+	}
+	go handlemsg1(w, r, c)
+}
+
+func handlemsg1(w http.ResponseWriter, r *http.Request, conn *websocket.Conn) {
+	clientId := RandName()
+	t := ffmpeg.NewTranscriber(clientId)
+	t.Conn = conn
+	t.TranscriberCodecInit()
+	defer t.TranscriberCodecDeinit()
+	defer t.StopTranscriber()
+	for {
+		_, message, err := conn.ReadMessage()
+		if err != nil {
+			log.Println("read:", err)
+			break
+		}
+		timestamp := binary.BigEndian.Uint64(message[:8])
+		packetdata := message[8:]
+		timedpacket := ffmpeg.TimedPacket{Timestamp: timestamp, Packetdata: ffmpeg.APacket{packetdata, len(packetdata)}}
+		str := t.FeedPacket(timedpacket)
+		var last string
+		if strings.Compare(last, str) != 0 {
+			last = str
+			res := map[string]interface{}{"timestamp": timestamp, "text": last}
+			jsonres, _ := json.Marshal(res)
+			fmt.Println(string(jsonres))
+			conn.WriteMessage(websocket.TextMessage, []byte(string(jsonres)))
+		}
+	}
+
+}
+
+func startServer1() {
+	http.HandleFunc("/speech2text", handleconnections1)
 }
 
 func main() {
 	flag.Parse()
 	log.SetFlags(0)
 	ffmpeg.DSInit()
-	startServer()
+	startServer1()
 	log.Fatal(http.ListenAndServe(*addr, nil))
 }
