@@ -33,8 +33,14 @@ type Transcriber struct {
 	handle       *C.struct_transcribe_thread
 	codec_params *C.codec_params
 	streamState  *C.StreamingState
+	refeed_data  *C.ds_audio_buffer
 	stopped      bool
 	mu           *sync.Mutex
+}
+
+type DsStreamCtx struct {
+	refeed_data *C.ds_audio_buffer
+	stream_ctx  *C.StreamingState
 }
 
 func DSInit() int {
@@ -97,6 +103,7 @@ func NewTranscriber(Id string) *Transcriber {
 		codec_params: C.lpms_codec_new(),
 		mu:           &sync.Mutex{},
 		streamState:  C.t_create_stream(),
+		refeed_data:  C.t_refeed_data(),
 	}
 	log.Println("New transcriber created.")
 	return t
@@ -126,8 +133,11 @@ func (t *Transcriber) FeedPacket(pkt TimedPacket) string {
 	defer C.free(unsafe.Pointer(buffer))
 	str := (*C.char)(unsafe.Pointer(C.malloc(C.sizeof_char * 256)))
 	defer C.free(unsafe.Pointer(str))
+	refeed_data := t.refeed_data
+
 	t.mu.Lock()
-	new_stream_ctx := C.t_ds_feedpkt(codec_params, stream_ctx, buffer, C.int(pktdata.Length), str)
+	new_stream_ctx := C.t_ds_feedpkt(codec_params, stream_ctx, buffer, C.int(pktdata.Length), refeed_data, str)
+	t.refeed_data = refeed_data
 	if new_stream_ctx != nil {
 		t.streamState = new_stream_ctx
 	}

@@ -146,11 +146,18 @@ StreamingState* t_create_stream(){
         av_log(0, AV_LOG_ERROR, "deepspeech streaming state creation failed\n");
         return NULL;
     } else {
-        av_log(0, AV_LOG_ERROR, "deepspeech streaming state created %d\n", stream_ctx);
+        av_log(0, AV_LOG_INFO, "deepspeech streaming state created\n");
     }
 
     return stream_ctx;
 }
+
+ds_audio_buffer* t_refeed_data(){
+    ds_audio_buffer* t_refeed_data = (ds_audio_buffer*)malloc(sizeof(ds_audio_buffer));
+    t_refeed_data->buffer = NULL;
+    t_refeed_data->buffer_size = 0;
+    return t_refeed_data;
+};
 
 void t_free_model(StreamingState *stream_ctx){
     if (stream_ctx != NULL)
@@ -460,7 +467,7 @@ const char* decode_feed(AVCodecContext *dec_ctx, AVPacket *pkt, AVFrame *frame)
     return res;    
 }
 
-StreamingState* t_decode_feed(AVCodecContext *dec_ctx, StreamingState* stream_ctx, AVPacket *pkt, AVFrame *frame, char* textres)
+StreamingState* t_decode_feed(AVCodecContext *dec_ctx, StreamingState* stream_ctx, AVPacket *pkt, AVFrame *frame, ds_audio_buffer* refeed_data, char* textres)
 {
     if (stream_ctx == NULL)
     {
@@ -521,6 +528,13 @@ StreamingState* t_decode_feed(AVCodecContext *dec_ctx, StreamingState* stream_ct
 #ifndef INLINE
             DS_FeedAudioContent(stream_ctx, (const short*)out_buffer, out_buffer_size / 2);
             const char* partial = DS_IntermediateDecode(stream_ctx);
+            
+            if (strlen(partial) > 135){
+                if (refeed_data->buffer == NULL || refeed_data->buffer_size == 0) 
+                    refeed_data->buffer = (char *)av_malloc(MAX_AUDIO_BUFFER_SIZE);
+                memcpy(refeed_data->buffer + refeed_data->buffer_size, out_buffer, out_buffer_size);
+                refeed_data->buffer_size += out_buffer_size;
+            }
             if (strlen(partial) > 150){
                 partial = DS_FinishStream(stream_ctx);
                 strcpy(textres, partial);
@@ -530,14 +544,17 @@ StreamingState* t_decode_feed(AVCodecContext *dec_ctx, StreamingState* stream_ct
                 int status = DS_CreateStream(dsctx, &stream_ctx);
                 if (status == DS_ERR_OK) {
                     new_stream_ctx = stream_ctx;
+                    // feed once more to prevent losing words at boundaries
+                    DS_FeedAudioContent(new_stream_ctx, (const short*)refeed_data->buffer, refeed_data->buffer_size / 2);
                 }
+                av_free(refeed_data->buffer);
+                refeed_data->buffer_size = 0;
             }
             else if(strlen(partial) == 0 || partial == NULL){
                 partial = "";
                 strcpy(textres, partial);
             }
 			else {
-                // res = partial;
                 strcpy(textres, partial);
 				DS_FreeString((char *)partial);
 			}
@@ -703,27 +720,20 @@ char* ds_feedpkt(const char* pktdata, int pktsize){
     return last;
 }
 
-StreamingState* t_ds_feedpkt(codec_params *codec_params, StreamingState* stream_ctx, char* pktdata, int pktsize, char* textres){
-    // if (stream_ctx == NULL)
-    // {
-    //     av_log(0, AV_LOG_ERROR, "Stream context not created.\n");
-    //     return;
-    // }
+StreamingState* t_ds_feedpkt(codec_params *codec_params, StreamingState* stream_ctx, char* pktdata, int pktsize, ds_audio_buffer* refeed_data, char* textres){
     c = codec_params->c;
-    // AVPacket *pkt;
     AVFrame *decoded_frame = NULL;  
-    // pkt = av_packet_alloc();
     AVPacket        packet;
     av_init_packet(&packet);
 
     packet.data = pktdata;
     packet.size = pktsize;
-    // av_log(0, AV_LOG_ERROR, "pktsize=%d\n", pktsize);
+
     if (!decoded_frame) {
         if (!(decoded_frame = av_frame_alloc())) {
             fprintf(stderr, "Could not allocate audio frame\n");
-            return;
+            return NULL;
         }
     }   
-    return t_decode_feed(c, stream_ctx, &packet, decoded_frame, textres);
+    return t_decode_feed(c, stream_ctx, &packet, decoded_frame, refeed_data, textres);
 }

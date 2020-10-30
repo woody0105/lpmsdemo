@@ -28,6 +28,11 @@ typedef struct {
 	size_t buffer_size;
 } ds_audio_buffer;
 
+typedef struct {
+    StreamingState* stream_ctx; 
+    ds_audio_buffer refeed_data;
+}ds_stream_context;
+
 #define MAX_STACK_SIZE 0x1000000
 #define PROCESSOR_UNIT 640
 
@@ -63,9 +68,11 @@ codec_params* lpms_codec_new();
 void lpms_codec_stop(codec_params* h);
 ModelState* t_deepspeech_init();
 StreamingState* t_create_stream();
+ds_audio_buffer* t_refeed_data();
+
 void t_free_model(StreamingState *stream_ctx);
 void t_audio_codec_init(codec_params *codec_params);
 void t_audio_codec_deinit(codec_params *codec_params);
-StreamingState* t_ds_feedpkt(codec_params *codec_params, StreamingState *stream_ctx, char* pktdata, int pktsize, char* textres);
+StreamingState* t_ds_feedpkt(codec_params *codec_params, StreamingState *stream_ctx, char* pktdata, int pktsize, ds_audio_buffer* refeed_data, char* textres);
 #endif
 
